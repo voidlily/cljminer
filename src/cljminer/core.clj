@@ -2,7 +2,9 @@
   (:require [clojure.java.io :as io]
             [pandect.core :refer (sha1)]
             [clj-time.core :refer (now)]
-            [clj-time.coerce :refer (to-long)]))
+            [clj-time.coerce :refer (to-long)]
+            [clj-jgit.porcelain :refer (with-repo)]
+            [clojure.java.shell :refer (with-sh-dir sh)]))
 
 (def difficulty (atom nil))
 (def nonce-seq (iterate inc 0N))
@@ -78,13 +80,55 @@
         .getObjectId
         .getName)))
 
+(defn write-tree
+  ([repo] (write-tree repo "git write-tree"))
+  ([repo write-tree-cmd]
+     (with-sh-dir repo
+       (sh write-tree-cmd))))
+
+(defn increment-line [user amount]
+  (str user ": " (inc (Integer/parseInt amount))))
+
+(defn process-line [line username]
+  (if (or
+       (re-matches #"^Private Gitcoin Ledger" line)
+       (re-matches #"^======" line))
+    line
+    (do
+      (let [[user amount] (clojure.string/split line #": ")]
+        (if (= user username)
+          (increment-line user amount)
+          line)))))
+
+(defn add-user-to-ledger [ledger username]
+  (str ledger "\n" username ": 1"))
+
+(defn update-ledger [repo username]
+  (let [ledger-file (str repo "/LEDGER.txt")
+        new-ledger-file (str repo "/LEDGER-NEW.txt")]
+    ;; TODO use buffered reader/writer if this gets too big
+    (let [ledger (clojure.string/trim (slurp ledger-file))
+          lines (clojure.string/split-lines ledger)]
+      (if (re-find (re-pattern (str username ":")) ledger)
+        (let [new-lines (map #(process-line % username) lines)]
+          (spit new-ledger-file (clojure.string/join "\n" new-lines)))
+        (spit new-ledger-file (add-user-to-ledger ledger username))))
+    ;; (with-open [rdr (io/reader ledger-file)
+    ;;             w (io/writer new-ledger-file)]
+    ;;   (doseq [line (line-seq rdr)]
+    ;;     (.write w (str (process-line line username) "\n"))))
+    ;;
+    (.renameTo (io/file new-ledger-file) (io/file ledger-file))))
+
 (defn find-nonce [difficulty]
   5)
 
-(defn -main []
+(defn run [repo username]
   (let [difficulty (get-difficulty)
         repo (get-repo)
-        base-commit (get-base-commit repo)]
+        parent (get-parent repo)
+        _ (update-ledger repo username)
+        tree (write-tree repo)]
     (find-nonce difficulty)
     )
   )
