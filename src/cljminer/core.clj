@@ -17,6 +17,7 @@
 ;;; if i don't find one in 15 minutes, shutdown-agents and start over?
 
 (defn commit-body [tree parent timestamp nonce]
+  "Generate a git commit object body"
   (str "tree " tree "\n"
        "parent " parent "\n"
        "author CTF user <me@example.com> " timestamp " +0000" "\n"
@@ -25,6 +26,10 @@
        "Give me a Gitcoin" "\n"
        "\n"
        nonce))
+
+(defn within-difficulty [hash difficulty]
+  "Is the hash lexicographically less than the difficulty?"
+  (< (compare hash difficulty) 0))
 
 (defn nonce-to-string [x]
   (Integer/toString x 36))
