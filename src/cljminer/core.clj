@@ -1,4 +1,5 @@
-(ns cljminer.core)
+(ns cljminer.core
+  (:require [clojure.java.io :as io]))
 
 (def difficulty (atom nil))
 (def nonce-seq (iterate inc 0N))
@@ -26,6 +27,20 @@
        "Give me a Gitcoin" "\n"
        "\n"
        nonce))
+
+(defn commit-object [body]
+  (let [header (str "commit " (.length body) (char 0))]
+    (str header body)))
+
+(defn filename []
+  "/tmp/commit")
+
+(defn deflate-commit [commit-object]
+  (with-open [w (-> (filename)
+                    io/output-stream
+                    java.util.zip.DeflaterOutputStream.
+                    io/writer)]
+    (.write w commit-object)))
 
 (defn within-difficulty [hash difficulty]
   "Is the hash lexicographically less than the difficulty?"
