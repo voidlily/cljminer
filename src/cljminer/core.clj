@@ -1,5 +1,8 @@
 (ns cljminer.core
-  (:require [clojure.java.io :as io]))
+  (:require [clojure.java.io :as io]
+            [pandect.core :refer (sha1)]
+            [clj-time.core :refer (now)]
+            [clj-time.coerce :refer (to-long)]))
 
 (def difficulty (atom nil))
 (def nonce-seq (iterate inc 0N))
@@ -17,30 +20,39 @@
 ;;; wrap this in a future with a 15 minute timeout?
 ;;; if i don't find one in 15 minutes, shutdown-agents and start over?
 
-(defn commit-body [tree parent timestamp nonce]
+(defn commit-content [tree parent nonce]
   "Generate a git commit object body"
-  (str "tree " tree "\n"
-       "parent " parent "\n"
-       "author CTF user <me@example.com> " timestamp " +0000" "\n"
-       "committer CTF user <me@example.com> " timestamp " +0000" "\n"
-       "\n"
-       "Give me a Gitcoin" "\n"
-       "\n"
-       nonce))
+  (let [timestamp (to-long (now))]
+    (str "tree " tree "\n"
+         "parent " parent "\n"
+         "author CTF user <me@example.com> " timestamp " +0000" "\n"
+         "committer CTF user <me@example.com> " timestamp " +0000" "\n"
+         "\n"
+         "Give me a Gitcoin" "\n"
+         "\n"
+         nonce)))
 
-(defn commit-object [body]
-  (let [header (str "commit " (.length body) (char 0))]
-    (str header body)))
+(defrecord Commit [store hash])
 
-(defn filename []
-  "/tmp/commit")
+(defn commit-object [content]
+  "Given a commit body, generate the full commit object including hash."
+  (let [header (str "commit " (.length content) (char 0))
+        store (str header content)
+        hash (sha1 store)]
+    (Commit. store hash)))
 
-(defn deflate-commit [commit-object]
-  (with-open [w (-> (filename)
+(defn filename [repo-path commit]
+  (let [hash (:hash commit)
+        dirname (subs hash 0 2)
+        filename (subs hash 2)]
+    (str repo-path ".git/objects/" dirname "/" filename)))
+
+(defn deflate-commit [commit repo-path]
+  (with-open [w (-> (filename repo-path)
                     io/output-stream
                     java.util.zip.DeflaterOutputStream.
                     io/writer)]
-    (.write w commit-object)))
+    (.write w (:store commit))))
 
 (defn within-difficulty [hash difficulty]
   "Is the hash lexicographically less than the difficulty?"
