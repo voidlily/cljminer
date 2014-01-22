@@ -20,6 +20,8 @@
 ;;; wrap this in a future with a 15 minute timeout?
 ;;; if i don't find one in 15 minutes, shutdown-agents and start over?
 
+;;; TODO still need to add file, write tree
+
 (defn commit-content [tree parent nonce]
   "Generate a git commit object body"
   (let [timestamp (to-long (now))]
@@ -54,9 +56,9 @@
                     io/writer)]
     (.write w (:store commit))))
 
-(defn within-difficulty [hash difficulty]
-  "Is the hash lexicographically less than the difficulty?"
-  (< (compare hash difficulty) 0))
+(defn within-difficulty [commit difficulty]
+  "Is the commit's hash lexicographically less than the difficulty?"
+  (< (compare (:hash commit) difficulty) 0))
 
 (defn nonce-to-string [x]
   (Integer/toString x 36))
@@ -67,8 +69,14 @@
 (defn get-repo []
   5)
 
-(defn get-base-commit [repo]
-  5)
+(defn get-parent[repo]
+  "For a given repo, get the sha of master"
+  (with-repo repo
+    (-> repo
+        .getRepository
+        (.getRef "refs/heads/master")
+        .getObjectId
+        .getName)))
 
 (defn find-nonce [difficulty]
   5)

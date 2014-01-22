@@ -6,4 +6,5 @@
   :dependencies [[org.clojure/clojure "1.5.1"]
                  [org.eclipse.jgit/org.eclipse.jgit "3.2.0.201312181205-r"]
                  [pandect "0.3.0"]
-                 [clj-time "0.6.0"]])
+                 [clj-time "0.6.0"]
+                 [clj-jgit "0.6.4"]])
