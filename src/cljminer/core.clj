@@ -6,7 +6,8 @@
             [clj-time.core :refer (now)]
             [clj-time.coerce :refer (to-long)]
             [clj-jgit.porcelain :refer (with-repo git-add git-reset git-fetch)]
-            [clojure.java.shell :refer (with-sh-dir sh)]))
+            [clojure.java.shell :refer (with-sh-dir sh)])
+  (:import java.security.MessageDigest))
 
 (def difficulty (atom nil))
 ;(def nonce-seq (iterate inc 0N))
@@ -33,24 +34,64 @@
 ;;; then store that hash
 ;;; then update with the nonce, finalize, repeat
 
-(defn commit-content [tree parent timestamp nonce]
-  "Generate a git commit object body"
+(defn commit-body-header [tree parent timestamp]
+  "Separate out the commit body header for better incremental hashing"
   (str "tree " tree "\n"
        "parent " parent "\n"
        "author CTF user <me@example.com> " timestamp " +0000" "\n"
        "committer CTF user <me@example.com> " timestamp " +0000" "\n"
        "\n"
        "Give me a Gitcoin" "\n"
-       "\n"
-       nonce))
+       "\n"))
+
+(def ^:private ^"[B" hex-chars
+  (byte-array (.getBytes "0123456789abcdef" "UTF-8")))
+
+(defn bytes->hex
+  "Convert Byte Array to Hex String
+(from pandect)"
+  ^String
+  [^"[B" data]
+  (let [len (count data)
+        ^"[B" buffer (byte-array (* 2 len))]
+    (loop [i 0]
+      (when (< i len)
+        (let [b (aget data i)]
+          (aset buffer (* 2 i) (aget hex-chars (bit-shift-right (bit-and b 0xF0) 4)))
+          (aset buffer (inc (* 2 i)) (aget hex-chars (bit-and b 0x0F))))
+        (recur (inc i))))
+    (String. buffer "UTF-8")))
+
+(defn digest->hexstring
+  "Converts bytearray from MessageDigest.digest() to hex string
+https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest/core.clj"
+  [digest]
+  (apply str (map (partial format "%02x") digest)))
+
+(defn build-partial-digest
+  "Build a partial digest of the commit body header. We add on the nonce and update the digest later."
+  [^String body-header]
+  (let [digest (MessageDigest/getInstance "SHA-1")
+        header-bytes (.getBytes body-header "UTF-8")]
+    (.update digest header-bytes)
+    digest))
+
+(defn compute-digest [^MessageDigest partial-digest ^String nonce]
+  (let [^MessageDigest cloned-digest (.clone partial-digest)]
+    (.update cloned-digest (.getBytes nonce))
+    (bytes->hex (.digest cloned-digest))))
+
+(defn commit-content [body-header nonce]
+  "Generate a git commit object body"
+  (str body-header nonce))
 
 (defrecord Commit [store hash])
 
-(defn commit-object [^String content]
+(defn commit-object [partial-digest ^String content]
   "Given a commit body, generate the full commit object including hash."
   (let [header (str "commit " (.length content) (char 0))
         store (str header content)
-        hash (sha1 store)]
+        hash (compute-digest partial-digest store)]
     (Commit. store hash)))
 
 (defn filename [repo commit]
@@ -75,23 +116,23 @@
 (defn nonce-to-string [x]
   (Integer/toString x 36))
 
-(defn build-commit [tree parent timestamp nonce]
+(defn build-commit [body-header partial-digest nonce]
   (->> nonce
        nonce-to-string
-       (commit-content tree parent timestamp)
-       commit-object))
+       (commit-content body-header)
+       (commit-object partial-digest)))
 
-(defn work-on-partition [nonces tree parent timestamp difficulty]
+(defn work-on-partition [nonces body-header partial-digest difficulty]
   "Given a unit of work (list of nonces), return the first one that satisfies the test, or none"
   (->> nonces
-       (map #(build-commit tree parent timestamp %))
+       (map #(build-commit body-header partial-digest %))
        (filter #(within-difficulty % difficulty))
        first))
 
-(defn find-first-commit [difficulty tree parent timestamp]
+(defn find-first-commit [body-header partial-digest difficulty]
   (->> nonce-seq
        (partition 1024)
-       (pmap #(work-on-partition % tree parent timestamp difficulty))
+       (pmap #(work-on-partition % body-header partial-digest difficulty))
        (filter #(not (nil? %)))
        first))
 
@@ -175,8 +216,10 @@
         _ (add-ledger repo)
         tree (write-tree repo)
         parent (get-parent repo)
-        timestamp (to-long (now))]
-    (find-first-commit difficulty tree parent timestamp)))
+        timestamp (to-long (now))
+        body-header (commit-body-header tree parent timestamp)
+        partial-digest (build-partial-digest body-header)]
+    (find-first-commit body-header partial-digest difficulty)))
 
 (defn run [repo username]
   ;; TODO fetch master and reset
