@@ -11,9 +11,9 @@
 
 (def difficulty (atom nil))
 ;(def nonce-seq (iterate inc 0N))
-(def max-nonce 8000000)
-(def nonce-seq (doall (range max-nonce)))
-(def nonce-length (inc (int (Math/log10 max-nonce))))
+(def nonce-length 5)
+(def max-nonce (Integer/parseInt (apply str (repeat nonce-length "a")) 36))
+(def nonce-seq (range max-nonce))
 
 ;;; Given a sequence starting from 0
 ;;; Convert each entry to base 36
@@ -31,10 +31,8 @@
 ;;; TODO better threading - core.async? channels?
 ;;; wrap a "done" state somewhere so it knows when to restart?
 
-;;; TODO incremental hashing
-;;; hash the first bit
-;;; then store that hash
-;;; then update with the nonce, finalize, repeat
+;;; TODO figure out how to get base36 back
+;;; given a max string "zzzzz" - be able to zero pad any variation of it
 
 (defn commit-body-header [tree parent timestamp]
   "Separate out the commit body header for better incremental hashing"
@@ -83,19 +81,22 @@ https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest
 
 (defn compute-digest [^MessageDigest partial-digest ^String nonce]
   (let [^MessageDigest cloned-digest (.clone partial-digest)]
-    (.update cloned-digest (.getBytes nonce))
+    (.update cloned-digest (.getBytes nonce "UTF-8"))
     (bytes->hex (.digest cloned-digest))))
+
+(defn pad-nonce [^String nonce]
+  (let [num-zeroes (- nonce-length (.length nonce))]
+    (str (apply str (repeat num-zeroes "0")) nonce)))
 
 (defn commit-content [body-header nonce]
   "Generate a git commit object body"
-  (str body-header (format (str "%0" nonce-length "d") nonce)))
+  (str body-header nonce))
 
 (defrecord Commit [store hash])
 
-(defn commit-object [partial-digest ^String content]
+(defn commit-object [partial-digest ^String store nonce]
   "Given a commit body, generate the full commit object including hash."
-  (let [store content
-        hash (compute-digest partial-digest store)]
+  (let [hash (compute-digest partial-digest nonce)]
     (Commit. store hash)))
 
 (defn filename [repo commit]
@@ -121,10 +122,9 @@ https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest
   (Integer/toString x 36))
 
 (defn build-commit [body-header partial-digest nonce]
-  (->> nonce
-       ;nonce-to-string
-       (commit-content body-header)
-       (commit-object partial-digest)))
+  (let [str-nonce (pad-nonce (nonce-to-string nonce))
+        store (commit-content body-header str-nonce)]
+    (commit-object partial-digest store str-nonce)))
 
 (defn work-on-partition [nonces body-header partial-digest difficulty]
   "Given a unit of work (list of nonces), return the first one that satisfies the test, or none"
@@ -167,7 +167,7 @@ https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest
         first)))
 
 (defn increment-line [user amount]
-  (str user ": " (inc (Integer/parseInt amount))))
+  (str user ": " (inc (Integer/parseInt amount)) "\n"))
 
 (defn process-line [line username]
   (if (or
