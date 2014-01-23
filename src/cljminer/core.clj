@@ -1,5 +1,7 @@
 (ns cljminer.core
   (:require [clojure.java.io :as io]
+            [clojure.core.async :as async]
+            [clojure.core.async.lab :as lab]
             [pandect.core :refer (sha1)]
             [clj-time.core :refer (now)]
             [clj-time.coerce :refer (to-long)]
@@ -8,7 +10,7 @@
 
 (def difficulty (atom nil))
 ;(def nonce-seq (iterate inc 0N))
-(def nonce-seq (range 3000000))
+(def nonce-seq (doall (range 6000000)))
 
 ;;; Given a sequence starting from 0
 ;;; Convert each entry to base 36
@@ -25,6 +27,11 @@
 
 ;;; TODO better threading - core.async? channels?
 ;;; wrap a "done" state somewhere so it knows when to restart?
+
+;;; TODO incremental hashing
+;;; hash the first bit
+;;; then store that hash
+;;; then update with the nonce, finalize, repeat
 
 (defn commit-content [tree parent timestamp nonce]
   "Generate a git commit object body"
@@ -74,10 +81,18 @@
        (commit-content tree parent timestamp)
        commit-object))
 
+(defn work-on-partition [nonces tree parent timestamp difficulty]
+  "Given a unit of work (list of nonces), return the first one that satisfies the test, or none"
+  (->> nonces
+       (map #(build-commit tree parent timestamp %))
+       (filter #(within-difficulty % difficulty))
+       first))
+
 (defn find-first-commit [difficulty tree parent timestamp]
   (->> nonce-seq
-       (pmap #(build-commit tree parent timestamp %))
-       (filter #(within-difficulty % difficulty))
+       (partition 1024)
+       (pmap #(work-on-partition % tree parent timestamp difficulty))
+       (filter #(not (nil? %)))
        first))
 
 (defn get-difficulty [repo]
@@ -152,7 +167,7 @@
 
 (defn push-master [repo]
   (with-sh-dir repo
-    (sh "git push origin master")))
+    (sh "git" "push" "origin" "master")))
 
 (defn find-commit [repo username]
   (let [difficulty (get-difficulty repo)
@@ -166,20 +181,22 @@
 (defn run [repo username]
   ;; TODO fetch master and reset
   (fetch-and-reset repo)
-  (when-let [commit (find-commit repo username)]
-    (deflate-commit repo commit)
-    (reset-branch repo commit) ;; might be able to use jgit here
-    (println "Mined a gitcoin!") ; TODO print commit message?
-    (println (str "Commit: " commit))
-    (push-master repo)
-    commit) ;; shell out
+  (let [start (System/currentTimeMillis)]
+    (when-let [commit (find-commit repo username)]
+      (deflate-commit repo commit)
+      (reset-branch repo commit) ;; might be able to use jgit here
+      (push-master repo)
+      (println "Mined a gitcoin!") ; TODO print commit message?
+      (println (str "Commit: " commit))
+      (println "Time taken" (- (System/currentTimeMillis) start) "ms")
+      commit)) ;; shell out
   )
 
 (def repo "/tmp/current-round")
 (def username "user-j7hi8ian")
 
-(defn go
-  ([] (go 15000))
+(defn start
+  ([] (start 15000))
   ([timeout]
      (while true
        (let [attempt (future (run repo username))
@@ -188,3 +205,71 @@
          (if (= result :timeout)
            (future-cancel attempt))))))
 ;; TODO timeout 30 seconds?
+
+(defn flush-chan [chan]
+  (async/go
+   (while true
+     (async/<! chan))))
+
+(defn process-results
+  "Processes the results, then closes and flushes the data channel."
+  [result-chan data-chan repo]
+  (println "Waiting for results")
+  (if-let [commit (async/<!! result-chan)]
+    (do
+      (deflate-commit repo commit)
+      (reset-branch repo commit)
+      (println "Mined a gitcoin!")
+      (println (str "Commit: " commit))
+      (push-master repo)
+      (println "process-results killing data-chan")
+      (async/close! data-chan))
+    (do
+      (println "No commit :(")
+      (flush-chan data-chan))))
+
+(defn process-data [data-chan result-chan difficulty tree parent timestamp]
+  (async/go
+   (while true
+     (let [nonce (async/<! data-chan)]
+       (when nonce
+         (let [commit (build-commit tree parent timestamp nonce)]
+           (when (within-difficulty commit difficulty)
+             (async/>! result-chan commit)
+             (println "data-process killing data-chan")
+             (async/close! data-chan)
+             (async/close! result-chan))))))))
+
+(defn find-commit-async [repo username timeout]
+  (let [difficulty (get-difficulty repo)
+        _ (update-ledger repo username)
+        _ (add-ledger repo)
+        tree (write-tree repo)
+        parent (get-parent repo)
+        timestamp (to-long (now))
+        data-chan (async/to-chan nonce-seq)
+        result-chan (async/timeout timeout)
+        num-goroutines 4
+        start (System/currentTimeMillis)]
+    (dotimes [i num-goroutines]
+      (process-data data-chan result-chan difficulty tree parent timestamp))
+    (println num-goroutines "goroutines spun up, total time" (- (System/currentTimeMillis) start) "ms")
+    {:result-chan result-chan :data-chan data-chan}))
+
+(defn find-commit-async-test [repo]
+  (let [channels (find-commit-async repo username 150000)]
+    (async/<!! (:result-chan channels))))
+
+(defn run-async
+  ([] (run-async 15000))
+  ([timeout] (run-async 15000 repo username))
+  ([timeout repo username]
+     (let [channels (find-commit-async repo username timeout)]
+       (process-results (:result-chan channels) (:data-chan channels)))))
+
+(defn run-async-test [repo]
+  (run-async 150000 repo username))
+
+(defn hash-rate [nonce time-in-sec]
+  (let [num-hashes (Integer/parseInt nonce 36)]
+    (float (/ num-hashes time-in-sec))))
