@@ -13,7 +13,7 @@
 ;(def nonce-seq (iterate inc 0N))
 (def nonce-length 5)
 (def max-nonce (Integer/parseInt (apply str (repeat nonce-length "a")) 36))
-(def nonce-seq (range max-nonce))
+(def nonce-seq (doall (range max-nonce)))
 
 ;;; Given a sequence starting from 0
 ;;; Convert each entry to base 36
@@ -27,12 +27,6 @@
 ;;; future work for competion
 ;;; wrap this in a future with a 15 minute timeout?
 ;;; if i don't find one in 15 minutes, shutdown-agents and start over?
-
-;;; TODO better threading - core.async? channels?
-;;; wrap a "done" state somewhere so it knows when to restart?
-
-;;; TODO figure out how to get base36 back
-;;; given a max string "zzzzz" - be able to zero pad any variation of it
 
 (defn commit-body-header [tree parent timestamp]
   "Separate out the commit body header for better incremental hashing"
