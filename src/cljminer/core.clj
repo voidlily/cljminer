@@ -3,11 +3,12 @@
             [pandect.core :refer (sha1)]
             [clj-time.core :refer (now)]
             [clj-time.coerce :refer (to-long)]
-            [clj-jgit.porcelain :refer (with-repo git-add)]
+            [clj-jgit.porcelain :refer (with-repo git-add git-reset git-fetch)]
             [clojure.java.shell :refer (with-sh-dir sh)]))
 
 (def difficulty (atom nil))
-(def nonce-seq (iterate inc 0N))
+;(def nonce-seq (iterate inc 0N))
+(def nonce-seq (range 3000000))
 
 ;;; Given a sequence starting from 0
 ;;; Convert each entry to base 36
@@ -38,23 +39,23 @@
 
 (defrecord Commit [store hash])
 
-(defn commit-object [content]
+(defn commit-object [^String content]
   "Given a commit body, generate the full commit object including hash."
   (let [header (str "commit " (.length content) (char 0))
         store (str header content)
         hash (sha1 store)]
     (Commit. store hash)))
 
-(defn filename [repo-path commit]
+(defn filename [repo commit]
   (let [hash (:hash commit)
         dirname (subs hash 0 2)
         filename (subs hash 2)
-        full-path (str repo-path "/.git/objects/" dirname "/" filename)]
+        full-path (str repo "/.git/objects/" dirname "/" filename)]
     (io/make-parents full-path)
     full-path))
 
-(defn deflate-commit [commit repo-path]
-  (with-open [w (-> (filename repo-path commit)
+(defn deflate-commit [repo commit]
+  (with-open [w (-> (filename repo commit)
                     io/output-stream
                     java.util.zip.DeflaterOutputStream.
                     io/writer)]
@@ -98,13 +99,12 @@
     (git-add repo "LEDGER.txt")))
 
 (defn write-tree
-  ([repo] (write-tree repo "git write-tree"))
-  ([repo write-tree-cmd]
-     (with-sh-dir repo
-       (-> (sh write-tree-cmd)
-           :out
-           clojure.string/split-lines
-           first))))
+  [repo]
+  (with-sh-dir repo
+    (-> (sh "git" "write-tree")
+        :out
+        clojure.string/split-lines
+        first)))
 
 (defn increment-line [user amount]
   (str user ": " (inc (Integer/parseInt amount))))
@@ -140,24 +140,51 @@
     ;;
     (.renameTo (io/file new-ledger-file) (io/file ledger-file))))
 
-(defn reset-branch [repo]
-  5)
+(defn fetch-and-reset [repo]
+  (with-sh-dir repo
+    (sh "git" "fetch"))
+  (with-repo repo
+    (git-reset repo "origin/master" :hard)))
+
+(defn reset-branch [repo commit]
+  (with-repo repo
+    (git-reset repo (:hash commit) :hard)))
 
 (defn push-master [repo]
-  5)
+  (with-sh-dir repo
+    (sh "git push origin master")))
 
-(defn run [repo username]
-  ;; TODO fetch master and reset
+(defn find-commit [repo username]
   (let [difficulty (get-difficulty repo)
         _ (update-ledger repo username)
         _ (add-ledger repo)
         tree (write-tree repo)
         parent (get-parent repo)
         timestamp (to-long (now))]
-    (find-first-commit difficulty tree parent timestamp)
-    (reset-branch repo) ;; might be able to use jgit here
-    (println "Mined a gitcoin!") ; TODO print commit message?
-    (push-master repo) ;; shell out
-    ))
+    (find-first-commit difficulty tree parent timestamp)))
 
+(defn run [repo username]
+  ;; TODO fetch master and reset
+  (fetch-and-reset repo)
+  (when-let [commit (find-commit repo username)]
+    (deflate-commit repo commit)
+    (reset-branch repo commit) ;; might be able to use jgit here
+    (println "Mined a gitcoin!") ; TODO print commit message?
+    (println (str "Commit: " commit))
+    (push-master repo)
+    commit) ;; shell out
+  )
+
+(def repo "/tmp/current-round")
+(def username "user-j7hi8ian")
+
+(defn go
+  ([] (go 15000))
+  ([timeout]
+     (while true
+       (let [attempt (future (run repo username))
+             result (deref attempt timeout :timeout)]
+         (println result)
+         (if (= result :timeout)
+           (future-cancel attempt))))))
 ;; TODO timeout 30 seconds?
