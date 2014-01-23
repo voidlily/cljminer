@@ -3,7 +3,7 @@
             [pandect.core :refer (sha1)]
             [clj-time.core :refer (now)]
             [clj-time.coerce :refer (to-long)]
-            [clj-jgit.porcelain :refer (with-repo)]
+            [clj-jgit.porcelain :refer (with-repo git-add)]
             [clojure.java.shell :refer (with-sh-dir sh)]))
 
 (def difficulty (atom nil))
@@ -80,6 +80,10 @@
         .getObjectId
         .getName)))
 
+(defn add-ledger [repo]
+  (with-repo repo
+    (git-add repo "LEDGER.txt")))
+
 (defn write-tree
   ([repo] (write-tree repo "git write-tree"))
   ([repo write-tree-cmd]
@@ -128,7 +132,10 @@
         repo (get-repo)
         parent (get-parent repo)
         _ (update-ledger repo username)
+        _ (add-ledger repo)
         tree (write-tree repo)]
     (find-nonce difficulty)
-    )
-  )
+    (reset-branch) ;; might be able to use jgit here
+    (println "Mined a gitcoin!") ; TODO print commit message?
+    (push-master) ;; shell out
+    ))
