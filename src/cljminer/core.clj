@@ -22,7 +22,8 @@
 ;;; wrap this in a future with a 15 minute timeout?
 ;;; if i don't find one in 15 minutes, shutdown-agents and start over?
 
-;;; TODO still need to add file, write tree
+;;; TODO better threading - core.async? channels?
+;;; wrap a "done" state somewhere so it knows when to restart?
 
 (defn commit-content [tree parent timestamp nonce]
   "Generate a git commit object body"
@@ -66,9 +67,15 @@
 (defn nonce-to-string [x]
   (Integer/toString x 36))
 
+(defn build-commit [tree parent timestamp nonce]
+  (->> nonce
+       nonce-to-string
+       (commit-content tree parent timestamp)
+       commit-object))
+
 (defn find-first-commit [difficulty tree parent timestamp]
   (->> nonce-seq
-       (pmap #(commit-object (commit-content tree parent timestamp %)))
+       (pmap #(build-commit tree parent timestamp %))
        (filter #(within-difficulty % difficulty))
        first))
 
@@ -94,7 +101,10 @@
   ([repo] (write-tree repo "git write-tree"))
   ([repo write-tree-cmd]
      (with-sh-dir repo
-       (:out (sh write-tree-cmd)))))
+       (-> (sh write-tree-cmd)
+           :out
+           clojure.string/split-lines
+           first))))
 
 (defn increment-line [user amount]
   (str user ": " (inc (Integer/parseInt amount))))
@@ -111,7 +121,7 @@
           line)))))
 
 (defn add-user-to-ledger [ledger username]
-  (str ledger "\n" username ": 1"))
+  (str ledger "\n" username ": 1\n"))
 
 (defn update-ledger [repo username]
   (let [ledger-file (str repo "/LEDGER.txt")
@@ -137,14 +147,17 @@
   5)
 
 (defn run [repo username]
+  ;; TODO fetch master and reset
   (let [difficulty (get-difficulty repo)
-        parent (get-parent repo)
         _ (update-ledger repo username)
         _ (add-ledger repo)
         tree (write-tree repo)
+        parent (get-parent repo)
         timestamp (to-long (now))]
-    (find-first-commit difficulty parent tree timestamp)
+    (find-first-commit difficulty tree parent timestamp)
     (reset-branch repo) ;; might be able to use jgit here
     (println "Mined a gitcoin!") ; TODO print commit message?
     (push-master repo) ;; shell out
     ))
+
+;; TODO timeout 30 seconds?
