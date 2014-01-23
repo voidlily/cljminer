@@ -11,7 +11,9 @@
 
 (def difficulty (atom nil))
 ;(def nonce-seq (iterate inc 0N))
-(def nonce-seq (doall (range 8000000)))
+(def max-nonce 8000000)
+(def nonce-seq (doall (range max-nonce)))
+(def nonce-length (inc (int (Math/log10 max-nonce))))
 
 ;;; Given a sequence starting from 0
 ;;; Convert each entry to base 36
@@ -36,13 +38,16 @@
 
 (defn commit-body-header [tree parent timestamp]
   "Separate out the commit body header for better incremental hashing"
-  (str "tree " tree "\n"
-       "parent " parent "\n"
-       "author CTF user <me@example.com> " timestamp " +0000" "\n"
-       "committer CTF user <me@example.com> " timestamp " +0000" "\n"
-       "\n"
-       "Give me a Gitcoin" "\n"
-       "\n"))
+  (let [content
+        (str "tree " tree "\n"
+             "parent " parent "\n"
+             "author CTF user <me@example.com> " timestamp " +0000" "\n"
+             "committer CTF user <me@example.com> " timestamp " +0000" "\n"
+             "\n"
+             "Give me a Gitcoin" "\n"
+             "\n")]
+    (str "commit " (+ nonce-length (.length content)) (char 0)
+         content)))
 
 (def ^:private ^"[B" hex-chars
   (byte-array (.getBytes "0123456789abcdef" "UTF-8")))
@@ -83,14 +88,13 @@ https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest
 
 (defn commit-content [body-header nonce]
   "Generate a git commit object body"
-  (str body-header nonce))
+  (str body-header (format (str "%0" nonce-length "d") nonce)))
 
 (defrecord Commit [store hash])
 
 (defn commit-object [partial-digest ^String content]
   "Given a commit body, generate the full commit object including hash."
-  (let [header (str "commit " (.length content) (char 0))
-        store (str header content)
+  (let [store content
         hash (compute-digest partial-digest store)]
     (Commit. store hash)))
 
@@ -118,7 +122,7 @@ https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest
 
 (defn build-commit [body-header partial-digest nonce]
   (->> nonce
-       nonce-to-string
+       ;nonce-to-string
        (commit-content body-header)
        (commit-object partial-digest)))
 
