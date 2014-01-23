@@ -243,6 +243,11 @@ https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest
            (future-cancel attempt))))))
 ;; TODO timeout 30 seconds?
 
+
+;;; core.async approach
+;;; interesting in theory, but channels are messy and add a lot of
+;;; maintenance overhead
+;;; usually to restart it i have to kill the jvm
 (defn flush-chan [chan]
   (async/go
    (while true
