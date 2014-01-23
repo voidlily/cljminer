@@ -11,7 +11,7 @@
 
 (def difficulty (atom nil))
 ;(def nonce-seq (iterate inc 0N))
-(def nonce-seq (doall (range 6000000)))
+(def nonce-seq (doall (range 8000000)))
 
 ;;; Given a sequence starting from 0
 ;;; Convert each entry to base 36
@@ -52,7 +52,7 @@
 (from pandect)"
   ^String
   [^"[B" data]
-  (let [len (count data)
+  (let [len (alength data)
         ^"[B" buffer (byte-array (* 2 len))]
     (loop [i 0]
       (when (< i len)
@@ -202,13 +202,9 @@ https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest
   (with-repo repo
     (git-reset repo "origin/master" :hard)))
 
-(defn reset-branch [repo commit]
-  (with-repo repo
-    (git-reset repo (:hash commit) :hard)))
-
-(defn push-master [repo]
+(defn push-to-master [repo hash]
   (with-sh-dir repo
-    (sh "git" "push" "origin" "master")))
+    (sh "git" "push" "origin" (str hash ":master"))))
 
 (defn find-commit [repo username]
   (let [difficulty (get-difficulty repo)
@@ -227,11 +223,11 @@ https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest
   (let [start (System/currentTimeMillis)]
     (when-let [commit (find-commit repo username)]
       (deflate-commit repo commit)
-      (reset-branch repo commit) ;; might be able to use jgit here
-      (push-master repo)
-      (println "Mined a gitcoin!") ; TODO print commit message?
-      (println (str "Commit: " commit))
-      (println "Time taken" (- (System/currentTimeMillis) start) "ms")
+      (push-to-master repo (:hash commit))
+      (let [end (System/currentTimeMillis)]
+        (println "Mined a gitcoin!") ; TODO print commit message?
+        (println (str "Commit: " commit))
+        (println "Time taken" (- end start) "ms"))
       commit)) ;; shell out
   )
 
@@ -261,10 +257,9 @@ https://github.com/ray1729/clj-message-digest/blob/master/src/clj_message_digest
   (if-let [commit (async/<!! result-chan)]
     (do
       (deflate-commit repo commit)
-      (reset-branch repo commit)
       (println "Mined a gitcoin!")
       (println (str "Commit: " commit))
-      (push-master repo)
+      (push-to-master repo (:hash commit))
       (println "process-results killing data-chan")
       (async/close! data-chan))
     (do
