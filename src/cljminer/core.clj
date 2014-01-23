@@ -24,17 +24,16 @@
 
 ;;; TODO still need to add file, write tree
 
-(defn commit-content [tree parent nonce]
+(defn commit-content [tree parent timestamp nonce]
   "Generate a git commit object body"
-  (let [timestamp (to-long (now))]
-    (str "tree " tree "\n"
-         "parent " parent "\n"
-         "author CTF user <me@example.com> " timestamp " +0000" "\n"
-         "committer CTF user <me@example.com> " timestamp " +0000" "\n"
-         "\n"
-         "Give me a Gitcoin" "\n"
-         "\n"
-         nonce)))
+  (str "tree " tree "\n"
+       "parent " parent "\n"
+       "author CTF user <me@example.com> " timestamp " +0000" "\n"
+       "committer CTF user <me@example.com> " timestamp " +0000" "\n"
+       "\n"
+       "Give me a Gitcoin" "\n"
+       "\n"
+       nonce))
 
 (defrecord Commit [store hash])
 
@@ -48,11 +47,13 @@
 (defn filename [repo-path commit]
   (let [hash (:hash commit)
         dirname (subs hash 0 2)
-        filename (subs hash 2)]
-    (str repo-path ".git/objects/" dirname "/" filename)))
+        filename (subs hash 2)
+        full-path (str repo-path "/.git/objects/" dirname "/" filename)]
+    (io/make-parents full-path)
+    full-path))
 
 (defn deflate-commit [commit repo-path]
-  (with-open [w (-> (filename repo-path)
+  (with-open [w (-> (filename repo-path commit)
                     io/output-stream
                     java.util.zip.DeflaterOutputStream.
                     io/writer)]
@@ -65,11 +66,16 @@
 (defn nonce-to-string [x]
   (Integer/toString x 36))
 
-(defn get-difficulty []
-  5)
+(defn find-first-commit [difficulty tree parent timestamp]
+  (->> nonce-seq
+       (pmap #(commit-object (commit-content tree parent timestamp %)))
+       (filter #(within-difficulty % difficulty))
+       first))
 
-(defn get-repo []
-  5)
+(defn get-difficulty [repo]
+  (let [difficulty-file (str repo "/difficulty.txt")
+        difficulty-contents (slurp difficulty-file)]
+    (first (clojure.string/split-lines difficulty-contents))))
 
 (defn get-parent[repo]
   "For a given repo, get the sha of master"
@@ -88,7 +94,7 @@
   ([repo] (write-tree repo "git write-tree"))
   ([repo write-tree-cmd]
      (with-sh-dir repo
-       (sh write-tree-cmd))))
+       (:out (sh write-tree-cmd)))))
 
 (defn increment-line [user amount]
   (str user ": " (inc (Integer/parseInt amount))))
@@ -124,18 +130,21 @@
     ;;
     (.renameTo (io/file new-ledger-file) (io/file ledger-file))))
 
-(defn find-nonce [difficulty]
+(defn reset-branch [repo]
+  5)
+
+(defn push-master [repo]
   5)
 
 (defn run [repo username]
-  (let [difficulty (get-difficulty)
-        repo (get-repo)
+  (let [difficulty (get-difficulty repo)
         parent (get-parent repo)
         _ (update-ledger repo username)
         _ (add-ledger repo)
-        tree (write-tree repo)]
-    (find-nonce difficulty)
-    (reset-branch) ;; might be able to use jgit here
+        tree (write-tree repo)
+        timestamp (to-long (now))]
+    (find-first-commit difficulty parent tree timestamp)
+    (reset-branch repo) ;; might be able to use jgit here
     (println "Mined a gitcoin!") ; TODO print commit message?
-    (push-master) ;; shell out
+    (push-master repo) ;; shell out
     ))
